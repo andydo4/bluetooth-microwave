@@ -6,6 +6,8 @@ A 3D microwave with a Bluetooth speaker inside. Paste a YouTube link into the co
 - **Server:** Express. `POST /api/audio` starts [yt-dlp](https://github.com/yt-dlp/yt-dlp) and replies once audio starts flowing; `GET /api/audio/:id` streams it, so playback starts before the download finishes
 - **Sound:** all Web Audio. The song goes through a lowpass + "metal box" reverb chain. Hum, beeps, and power-down are synthesized (`src/audio/engine.ts`)
 
+**Working on the code (human or AI)?** Start with [GEMINI.md](GEMINI.md), then [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it works + gotchas) and [docs/LEVELS.md](docs/LEVELS.md) (the planned levels feature).
+
 ## Run locally (Windows)
 
 1. Install yt-dlp: `winget install yt-dlp.yt-dlp` (or download `yt-dlp.exe` and put it on your PATH)
