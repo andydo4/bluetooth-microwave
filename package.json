@@ -10,6 +10,7 @@
   "dependencies": {
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.1",
+    "dseg": "^0.46.0",
     "express": "^5.2.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

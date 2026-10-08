@@ -4,15 +4,18 @@ import ControlPanel from './components/ControlPanel'
 import * as sound from './audio/engine'
 
 export type Status = 'idle' | 'loading' | 'playing'
+/** What to play: a pasted YouTube link, or one of the panel's preset buttons. */
+export type Source = { url: string } | { preset: string }
 
 export default function App() {
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
   const [endsAt, setEndsAt] = useState(0)
+  const [power, setPower] = useState(10)
   // Ends the current run (song finished, STOP pressed, or an error). Set by start().
   const finishRef = useRef<((message?: string) => void) | null>(null)
 
-  async function start(url: string) {
+  async function start(source: Source) {
     if (status !== 'idle') return
     setError('')
     sound.powerOn()
@@ -38,7 +41,7 @@ export default function App() {
       const res = await fetch('/api/audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify(source),
         signal: abort.signal,
       })
       const body = await res.json().catch(() => null)
@@ -59,11 +62,26 @@ export default function App() {
     finishRef.current?.()
   }
 
+  function changePower(level: number) {
+    setPower(level)
+    sound.setPowerLevel(level)
+  }
+
   return (
     <main className="h-screen w-screen">
       <Scene
         on={status !== 'idle'}
-        panel={<ControlPanel status={status} endsAt={endsAt} error={error} onStart={start} onStop={stop} />}
+        panel={
+          <ControlPanel
+            status={status}
+            endsAt={endsAt}
+            error={error}
+            power={power}
+            onStart={start}
+            onStop={stop}
+            onPower={changePower}
+          />
+        }
       />
     </main>
   )

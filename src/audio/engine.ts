@@ -92,6 +92,27 @@ function boxImpulse(c: AudioContext): AudioBuffer {
   return buf
 }
 
+/** The short chirp each panel key makes. */
+export function keyBeep() {
+  beep(audio().currentTime, 0.07, 2100)
+}
+
+// Power level 1–10 sets how sealed-in the speaker sounds: 10 is fully muffled
+// (700 Hz cutoff), 1 barely (~8.4 kHz). Each level step multiplies the cutoff by ~1.3.
+let powerLevel = 10
+let muffle: { lp1: BiquadFilterNode; lp2: BiquadFilterNode; box: BiquadFilterNode } | null = null
+function applyPowerLevel(at: number) {
+  if (!muffle) return
+  const cutoff = 700 * 12 ** ((10 - powerLevel) / 9)
+  muffle.lp1.frequency.setTargetAtTime(cutoff, at, 0.05)
+  muffle.lp2.frequency.setTargetAtTime(cutoff * 1.3, at, 0.05)
+  muffle.box.gain.setTargetAtTime(5 * (powerLevel / 10), at, 0.05)
+}
+export function setPowerLevel(level: number) {
+  powerLevel = level
+  if (ctx) applyPowerLevel(ctx.currentTime)
+}
+
 /** Press START: beep, then the microwave hums until powerOff(). Must be called from the tap/click. */
 export function powerOn() {
   const c = audio()
@@ -194,6 +215,8 @@ function getPlayer(): HTMLAudioElement {
   src.connect(lp1).connect(lp2).connect(box)
   box.connect(dry).connect(master)
   box.connect(reverb).connect(wet).connect(master)
+  muffle = { lp1, lp2, box }
+  applyPowerLevel(c.currentTime)
   return player
 }
 

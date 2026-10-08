@@ -46,6 +46,16 @@ type Job = {
   listeners: Set<() => void>
 }
 
+// The panel's preset buttons. After a preset's first full download its audio stays in memory,
+// so later clicks start instantly (until the server restarts or sleeps).
+const PRESETS: Record<string, string> = {
+  popcorn: 'https://www.youtube.com/watch?v=hz1X9VLMjWc',
+  defrost: 'https://www.youtube.com/watch?v=YJVmu6yttiw',
+  reheat: 'https://www.youtube.com/watch?v=J2X5mJ3HDYE',
+  beverage: 'https://www.youtube.com/watch?v=6ONRf7h3Mdk',
+}
+const presetCache = new Map<string, { id: string; duration: number }>()
+
 // Audio being (or recently) downloaded, by id. Lets playback start while yt-dlp is still downloading.
 const jobs = new Map<string, Job>()
 let activeJobs = 0
@@ -54,7 +64,17 @@ const app = express()
 // Step 1: start yt-dlp. Responds once audio starts flowing (with the song length),
 // or with an error if YouTube refuses, so failures still show a clear message.
 app.post('/api/audio', express.json(), (req, res) => {
-  const url = String(req.body?.url ?? '')
+  const preset = String(req.body?.preset ?? '')
+  if (preset && !Object.hasOwn(PRESETS, preset)) {
+    res.status(400).json({ error: 'Unknown preset.' })
+    return
+  }
+  const cached = presetCache.get(preset)
+  if (cached) {
+    res.json(cached)
+    return
+  }
+  const url = preset ? PRESETS[preset] : String(req.body?.url ?? '')
   if (!isYouTubeUrl(url)) {
     res.status(400).json({ error: 'That is not a YouTube link.' })
     return
@@ -82,6 +102,7 @@ app.post('/api/audio', express.json(), (req, res) => {
   activeJobs++
   const id = randomUUID()
   const job: Job = { chunks: [], size: 0, done: false, listeners: new Set() }
+  let duration = 0
   let responded = false
   let cancelled = false
   let current: ChildProcess | null = null
@@ -114,7 +135,7 @@ app.post('/api/audio', express.json(), (req, res) => {
         responded = true
         job.size = Number(stderr.match(/SIZE=(\d+)/)?.[1] ?? 0)
         jobs.set(id, job)
-        const duration = Number(stderr.match(/DURATION=([\d.]+)/)?.[1] ?? 0)
+        duration = Number(stderr.match(/DURATION=([\d.]+)/)?.[1] ?? 0)
         res.json({ id, duration })
       }
     })
@@ -133,7 +154,9 @@ app.post('/api/audio', express.json(), (req, res) => {
       activeJobs--
       job.done = true
       notify()
-      setTimeout(() => jobs.delete(id), 5 * 60 * 1000)
+      const complete = code === 0 && bytes > 0 && (!job.size || bytes === job.size)
+      if (preset && complete) presetCache.set(preset, { id, duration })
+      else setTimeout(() => jobs.delete(id), 5 * 60 * 1000)
       // Exit 0 with no audio means --match-filter rejected it.
       if (code === 0) fail(422, `Videos longer than ${MAX_DURATION_SEC / 60} minutes won't fit.`)
       else fail(502, 'Could not get audio for that video.')

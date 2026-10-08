@@ -117,7 +117,7 @@ export default function Microwave({ on, panel, overlay }: Props) {
       </mesh>
       {/* occlude="blending": the HTML sits behind the canvas and shows through a cut-out,
           so 3D parts in front of it (the door handle) correctly cover it. */}
-      <Html transform occlude="blending" distanceFactor={2} portal={overlay} position={[1.875, 0.35, 1.76]}>
+      <Html transform occlude="blending" distanceFactor={2} portal={overlay} position={[1.875, 0.02, 1.76]}>
         {panel}
       </Html>
 

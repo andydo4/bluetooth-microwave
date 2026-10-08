@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Segmented LED font for the microwave display (DSEG, SIL Open Font License) */
+@font-face {
+  font-family: "DSEG14";
+  src: url("../node_modules/dseg/fonts/DSEG14-Classic/DSEG14Classic-Italic.woff2") format("woff2");
+  font-display: block;
+}
+
+@theme {
+  --font-dseg: "DSEG14", ui-monospace, monospace;
+}
+
 html, body, #root {
   margin: 0;
   height: 100%;
