@@ -33,6 +33,7 @@ function useDoorScreenTexture() {
   }, [])
 }
 
+/** panel: the control panel to mount on the microwave's face, or null when it's shown elsewhere (phones). */
 type Props = { on: boolean; panel: ReactNode; overlay: RefObject<HTMLDivElement> }
 
 export default function Microwave({ on, panel, overlay }: Props) {
@@ -117,9 +118,11 @@ export default function Microwave({ on, panel, overlay }: Props) {
       </mesh>
       {/* occlude="blending": the HTML sits behind the canvas and shows through a cut-out,
           so 3D parts in front of it (the door handle) correctly cover it. */}
-      <Html transform occlude="blending" distanceFactor={2} portal={overlay} position={[1.875, 0.02, 1.76]}>
-        {panel}
-      </Html>
+      {panel && (
+        <Html transform occlude="blending" distanceFactor={2} portal={overlay} position={[1.875, 0.02, 1.76]}>
+          <div className="@container w-[220px]">{panel}</div>
+        </Html>
+      )}
 
       {/* Feet */}
       {[[-2.2, -1.4], [2.2, -1.4], [-2.2, 1.4], [2.2, 1.4]].map(([x, z]) => (

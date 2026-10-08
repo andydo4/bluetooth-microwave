@@ -1,9 +1,27 @@
-import { useRef, type ReactNode } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { Canvas, useThree } from '@react-three/fiber'
+import * as THREE from 'three'
 import { ContactShadows, Environment, Lightformer, OrbitControls } from '@react-three/drei'
 import Microwave from './Microwave'
 
 type Props = { on: boolean; panel: ReactNode }
+
+const START_DISTANCE = 9.6 // camera distance on desktop
+const HALF_WIDTH = 4.4 // half the width (world units) the view must fit: the angled microwave plus margin
+
+// Keeps the whole microwave in view whatever the screen shape. With no panel on its face (phones),
+// it frames the microwave tightly; otherwise it only backs off when the window is too narrow.
+function FitCamera({ tight }: { tight: boolean }) {
+  const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera
+  const size = useThree((s) => s.size)
+  useEffect(() => {
+    const halfFov = THREE.MathUtils.degToRad(camera.fov / 2)
+    const halfFovX = Math.atan(Math.tan(halfFov) * (size.width / size.height))
+    const fit = HALF_WIDTH / Math.tan(halfFovX)
+    camera.position.setLength(tight ? fit : Math.max(START_DISTANCE, fit))
+  }, [camera, size, tight])
+  return null
+}
 
 export default function Scene({ on, panel }: Props) {
   // Stable mount point for the HTML control panel. Without it drei's <Html> re-mounts
@@ -26,10 +44,11 @@ export default function Scene({ on, panel }: Props) {
         <Microwave on={on} panel={panel} overlay={overlay} />
         <ContactShadows frames={1} position={[0, -1.62, 0]} opacity={0.6} scale={12} blur={2.5} far={3} />
 
+        <FitCamera tight={!panel} />
         <OrbitControls
           enablePan={false}
-          minDistance={6}
-          maxDistance={13}
+          minDistance={5}
+          maxDistance={16}
           minPolarAngle={Math.PI / 4}
           maxPolarAngle={Math.PI / 2}
           minAzimuthAngle={-Math.PI / 3.5}
