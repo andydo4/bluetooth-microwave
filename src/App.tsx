@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Scene from './components/Scene'
-import ControlPanel from './components/ControlPanel'
+import ControlPanel, { MiniDisplay } from './components/ControlPanel'
 import * as sound from './audio/engine'
 
 export type Status = 'idle' | 'loading' | 'playing'
@@ -9,7 +9,7 @@ export type Source = { url: string } | { preset: string }
 /** DO NOT PRESS: arcing sparks → fire → exploded (until you buy a new one). */
 export type Wreck = 'none' | 'arcing' | 'fire' | 'exploded'
 
-// Phones get the microwave on top and a full-size control panel underneath; on its face it'd be too small to tap.
+// Phones get the microwave full-screen and the control panel in a slide-up sheet; on its face it'd be too small to tap.
 const PHONE_QUERY = '(max-width: 700px)'
 function useIsPhone() {
   const [phone, setPhone] = useState(() => matchMedia(PHONE_QUERY).matches)
@@ -30,6 +30,7 @@ export default function App() {
   const [power, setPower] = useState(10)
   const [wreck, setWreck] = useState<Wreck>('none')
   const [canBuyNew, setCanBuyNew] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false) // phones: is the control panel slid up?
   // Ends the current run (song finished, STOP pressed, or an error). Set by start().
   // quiet: no power-down sound (the explosion makes its own).
   const finishRef = useRef<((message?: string, quiet?: boolean) => void) | null>(null)
@@ -112,17 +113,24 @@ export default function App() {
       error={error}
       power={power}
       wreck={wreck}
-      onStart={start}
+      // On phones, starting something closes the sheet so you watch the microwave.
+      onStart={(source) => {
+        setSheetOpen(false)
+        start(source)
+      }}
       onStop={stop}
       onPower={changePower}
-      onOverload={overload}
+      onOverload={() => {
+        setSheetOpen(false)
+        overload()
+      }}
     />
   )
   const on = status !== 'idle' || wreck === 'arcing' || wreck === 'fire'
   const buyButton = canBuyNew && (
     <button
       onClick={buyNew}
-      className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2 animate-bounce rounded-full bg-zinc-100 px-6 py-3 text-sm font-extrabold tracking-wide text-zinc-900 shadow-[0_4px_0_#71717a]"
+      className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 animate-bounce rounded-full bg-zinc-100 px-6 py-3 text-sm font-extrabold tracking-wide text-zinc-900 shadow-[0_4px_0_#71717a]"
     >
       Buy new microwave
     </button>
@@ -130,12 +138,37 @@ export default function App() {
 
   if (phone) {
     return (
-      <main className="flex min-h-svh flex-col">
-        <div className="relative h-[38svh] min-h-[220px] shrink-0">
-          <Scene on={on} wreck={wreck} panel={null} />
-          {buyButton}
+      <main className="relative h-svh w-screen overflow-hidden">
+        <Scene on={on} wreck={wreck} panel={null} />
+        {buyButton}
+
+        {/* Collapsed: a small bar with the LED readout. Tap to slide the controls up. */}
+        <button
+          onClick={() => setSheetOpen(true)}
+          className="absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 touch-manipulation items-center gap-3 rounded-full border border-black/60 bg-[#141418]/95 py-2 pl-4 pr-3 shadow-[0_4px_16px_#000a]"
+        >
+          <span className="flex h-8 min-w-[92px] items-center justify-end rounded-sm bg-[#071108] px-2">
+            <MiniDisplay status={status} endsAt={endsAt} error={error} wreck={wreck} />
+          </span>
+          <span className="whitespace-nowrap text-[11px] font-bold tracking-[0.15em] text-zinc-300">CONTROLS ▲</span>
+        </button>
+
+        {/* Tapping the scene behind the open sheet closes it. */}
+        {sheetOpen && <div className="absolute inset-0 z-20 bg-black/40" onClick={() => setSheetOpen(false)} />}
+        <div
+          className={`absolute inset-x-0 bottom-0 z-30 max-h-[85svh] overflow-y-auto rounded-t-2xl bg-[#0d0d10] px-4 pb-6 pt-2 shadow-[0_-8px_24px_#000c] transition-transform duration-300 ${
+            sheetOpen ? 'translate-y-0' : 'pointer-events-none translate-y-full'
+          }`}
+        >
+          <button
+            onClick={() => setSheetOpen(false)}
+            aria-label="Hide controls"
+            className="mx-auto mb-2 flex h-6 w-full touch-manipulation items-center justify-center"
+          >
+            <span className="h-1.5 w-12 rounded-full bg-zinc-600" />
+          </button>
+          <div className="@container mx-auto max-w-[440px]">{panel}</div>
         </div>
-        <div className="@container mx-auto w-full max-w-[440px] px-4 pb-6">{panel}</div>
       </main>
     )
   }

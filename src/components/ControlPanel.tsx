@@ -39,21 +39,54 @@ function Key({ children, className = '', ...props }: { children: ReactNode; clas
   )
 }
 
-// Rendered on the microwave's face on desktop (see Microwave.tsx), or full-width under it on phones
-// (see App.tsx). Sizes step up when the panel is 300px+ wide, via container queries.
-export default function ControlPanel({ status, endsAt, error, power, wreck, onStart, onStop, onPower, onOverload }: Props) {
-  const [url, setUrl] = useState('')
-  const [flash, setFlash] = useState('') // short-lived display message, like "PL 7"
-  const flashTimer = useRef(0)
-  const [, rerender] = useState(0)
-  const idle = status === 'idle'
+type DisplayState = { status: Status; endsAt: number; error: string; wreck: Wreck }
 
-  // Re-render a few times a second so the countdown ticks.
+/** What the LED display reads. `flash` is a short-lived message like "PL 7". */
+function displayText({ status, endsAt, error, wreck }: DisplayState, flash = '') {
+  return wreck === 'exploded' ? '' // fried
+    : wreck === 'fire' ? 'FIRE'
+    : wreck === 'arcing' ? 'HOT'
+    : flash ? flash
+    : status === 'playing' ? formatTime(endsAt - Date.now())
+    : status === 'loading' ? 'COOK'
+    : error ? 'Err'
+    : 'READY'
+}
+
+function isPulsing({ status, wreck }: DisplayState, flash = '') {
+  return (status === 'loading' && !flash) || wreck === 'arcing' || wreck === 'fire'
+}
+
+/** Re-renders a few times a second while playing, so a countdown ticks. */
+function useTick(status: Status) {
+  const [, rerender] = useState(0)
   useEffect(() => {
     if (status !== 'playing') return
     const id = setInterval(() => rerender((n) => n + 1), 250)
     return () => clearInterval(id)
   }, [status])
+}
+
+/** The LED readout on its own, for the phone's collapsed control bar. */
+export function MiniDisplay(props: DisplayState) {
+  useTick(props.status)
+  return (
+    <span
+      className={`font-dseg text-lg text-[#4dff88] [text-shadow:0_0_6px_#4dff88aa] ${isPulsing(props) ? 'animate-pulse' : ''}`}
+    >
+      {displayText(props)}
+    </span>
+  )
+}
+
+// Rendered on the microwave's face on desktop (see Microwave.tsx), or in a slide-up sheet on phones
+// (see App.tsx). Sizes step up when the panel is 300px+ wide, via container queries.
+export default function ControlPanel({ status, endsAt, error, power, wreck, onStart, onStop, onPower, onOverload }: Props) {
+  const [url, setUrl] = useState('')
+  const [flash, setFlash] = useState('') // short-lived display message, like "PL 7"
+  const flashTimer = useRef(0)
+  const idle = status === 'idle'
+  useTick(status)
 
   function show(message: string) {
     setFlash(message)
@@ -77,15 +110,7 @@ export default function ControlPanel({ status, endsAt, error, power, wreck, onSt
     }
   }
 
-  const display =
-    wreck === 'exploded' ? '' // fried
-    : wreck === 'fire' ? 'FIRE'
-    : wreck === 'arcing' ? 'HOT'
-    : flash ? flash
-    : status === 'playing' ? formatTime(endsAt - Date.now())
-    : status === 'loading' ? 'COOK'
-    : error ? 'Err'
-    : 'READY'
+  const state = { status, endsAt, error, wreck }
 
   return (
     <form
@@ -95,10 +120,10 @@ export default function ControlPanel({ status, endsAt, error, power, wreck, onSt
       <div className="flex h-[58px] @min-[300px]:h-[72px] items-center justify-end overflow-hidden rounded-sm border border-black bg-[#071108] px-3 shadow-[inset_0_2px_6px_#000]">
         <span
           className={`font-dseg text-[28px] @min-[300px]:text-[36px] text-[#4dff88] [text-shadow:0_0_8px_#4dff88aa] ${
-            (status === 'loading' && !flash) || wreck === 'arcing' || wreck === 'fire' ? 'animate-pulse' : ''
+            isPulsing(state, flash) ? 'animate-pulse' : ''
           }`}
         >
-          {display}
+          {displayText(state, flash)}
         </span>
       </div>
 
