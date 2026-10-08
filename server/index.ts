@@ -40,6 +40,8 @@ function isYouTubeUrl(raw: string): boolean {
 
 type Job = {
   chunks: Buffer[]
+  /** Exact final size in bytes when yt-dlp knows it. Safari needs this to play at all. */
+  size: number
   done: boolean
   listeners: Set<() => void>
 }
@@ -67,8 +69,9 @@ app.post('/api/audio', express.json(), (req, res) => {
     '--no-playlist',
     '--match-filter', `duration <= ${MAX_DURATION_SEC}`,
     '--js-runtimes', 'node',
-    // With -o -, yt-dlp prints to stderr, so this doesn't mix into the audio.
+    // With -o -, yt-dlp prints to stderr, so these don't mix into the audio.
     '--print', 'before_dl:DURATION=%(duration)s',
+    '--print', 'before_dl:SIZE=%(filesize)s',
     '-q',
     '-o', '-',
   ]
@@ -78,7 +81,7 @@ app.post('/api/audio', express.json(), (req, res) => {
 
   activeJobs++
   const id = randomUUID()
-  const job: Job = { chunks: [], done: false, listeners: new Set() }
+  const job: Job = { chunks: [], size: 0, done: false, listeners: new Set() }
   let responded = false
   let cancelled = false
   let current: ChildProcess | null = null
@@ -109,6 +112,7 @@ app.post('/api/audio', express.json(), (req, res) => {
       notify()
       if (!responded) {
         responded = true
+        job.size = Number(stderr.match(/SIZE=(\d+)/)?.[1] ?? 0)
         jobs.set(id, job)
         const duration = Number(stderr.match(/DURATION=([\d.]+)/)?.[1] ?? 0)
         res.json({ id, duration })
@@ -145,7 +149,9 @@ app.post('/api/audio', express.json(), (req, res) => {
   })
 })
 
-// Step 2: the <audio> element streams from here. Sends what's downloaded so far, then the rest as it arrives.
+// Step 2: the <audio> element streams from here, getting bytes as soon as they've downloaded.
+// Safari (all iPhone browsers) only plays audio from servers that answer byte-range requests
+// with the total size, so when yt-dlp told us the size we serve ranges; otherwise one open stream.
 app.get('/api/audio/:id', (req, res) => {
   const job = jobs.get(req.params.id)
   if (!job) {
@@ -155,10 +161,45 @@ app.get('/api/audio/:id', (req, res) => {
   const isMp4 = job.chunks[0]?.subarray(4, 8).toString() === 'ftyp'
   res.set('Content-Type', isMp4 ? 'audio/mp4' : 'audio/webm')
 
-  let sent = 0
+  let start = 0
+  let end = Infinity // inclusive
+  const total = job.size
+  if (total) {
+    res.set('Accept-Ranges', 'bytes')
+    end = total - 1
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '')
+    if (range) {
+      const [, from, to] = range
+      if (from) {
+        start = Number(from)
+        if (to) end = Math.min(Number(to), total - 1)
+      } else if (to) {
+        start = Math.max(0, total - Number(to)) // "bytes=-N": the last N bytes
+      }
+      if (start > end) {
+        res.status(416).set('Content-Range', `bytes */${total}`).end()
+        return
+      }
+      res.status(206).set('Content-Range', `bytes ${start}-${end}/${total}`)
+    }
+    res.set('Content-Length', String(end - start + 1))
+  }
+
+  let pos = start // next byte to send
   const pump = () => {
-    while (sent < job.chunks.length) res.write(job.chunks[sent++])
-    if (job.done) {
+    let offset = 0
+    for (const chunk of job.chunks) {
+      const chunkEnd = offset + chunk.length
+      if (chunkEnd > pos && offset <= end) {
+        const to = Math.min(chunk.length, end - offset + 1)
+        res.write(chunk.subarray(pos - offset, to))
+        pos = offset + to
+      }
+      offset = chunkEnd
+      if (pos > end) break
+    }
+    // Done, or the download ended early (the browser sees a short file and stops).
+    if (pos > end || job.done) {
       job.listeners.delete(pump)
       res.end()
     }
