@@ -1,10 +1,11 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { ContactShadows, Environment, Lightformer, OrbitControls } from '@react-three/drei'
 import Microwave from './Microwave'
+import type { Wreck } from '../App'
 
-type Props = { on: boolean; panel: ReactNode }
+type Props = { on: boolean; wreck: Wreck; panel: ReactNode }
 
 const START_DISTANCE = 9.6 // camera distance on desktop
 const HALF_WIDTH = 4.4 // half the width (world units) the view must fit: the angled microwave plus margin
@@ -23,7 +24,20 @@ function FitCamera({ tight }: { tight: boolean }) {
   return null
 }
 
-export default function Scene({ on, panel }: Props) {
+// The floor shadow is normally rendered once (the microwave doesn't move). While things are
+// flying (explosion, the new one dropping in) it re-renders every frame.
+function useLiveShadows(wreck: Wreck) {
+  const [live, setLive] = useState(false)
+  useEffect(() => {
+    if (wreck === 'exploded') return setLive(true)
+    const id = setTimeout(() => setLive(false), 1200) // after the drop-in lands
+    return () => clearTimeout(id)
+  }, [wreck])
+  return live || wreck === 'exploded'
+}
+
+export default function Scene({ on, wreck, panel }: Props) {
+  const liveShadows = useLiveShadows(wreck)
   // Stable mount point for the HTML control panel. Without it drei's <Html> re-mounts
   // when R3F connects events, and React wipes the panel before it ever shows.
   const overlay = useRef<HTMLDivElement>(null!)
@@ -41,8 +55,8 @@ export default function Scene({ on, panel }: Props) {
           <Lightformer intensity={2} position={[5, 1, 2]} rotation-y={-Math.PI / 2} scale={[6, 3, 1]} />
         </Environment>
 
-        <Microwave on={on} panel={panel} overlay={overlay} />
-        <ContactShadows frames={1} position={[0, -1.62, 0]} opacity={0.6} scale={12} blur={2.5} far={3} />
+        <Microwave on={on} wreck={wreck} panel={wreck === 'exploded' ? null : panel} overlay={overlay} />
+        <ContactShadows key={String(liveShadows)} frames={liveShadows ? Infinity : 1} position={[0, -1.62, 0]} opacity={0.6} scale={12} blur={2.5} far={3} />
 
         <FitCamera tight={!panel} />
         <OrbitControls

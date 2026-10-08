@@ -1,18 +1,14 @@
-import { useMemo, useRef, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import Speaker from './Speaker'
+import { Explosion, Fire, Sparks } from './Mayhem'
+import { BLACK, CAVITY, DOOR, METAL, TURNTABLE_Y } from './dims'
+import type { Wreck } from '../App'
 
-// Units: the microwave is 5 wide, 3 tall, 3.4 deep (front face at z = 1.7), centered on the origin.
-// Cooking cavity is on the left (x -2.4..1.2), control panel on the right (x 1.25..2.5).
-const CAVITY = { x: -0.6, w: 3.6, h: 2.8, d: 3.2 }
-const DOOR = { x: -0.625, w: 3.75, z: 1.74 }
-const FLOOR_Y = -CAVITY.h / 2
-
-const METAL = { color: '#c4c8ce', metalness: 0.5, roughness: 0.3 }
 const metal = <meshStandardMaterial {...METAL} />
-const black = <meshStandardMaterial color="#1a1a1e" roughness={0.35} />
+const black = <meshStandardMaterial {...BLACK} />
 
 // The dotted metal screen on the door: white = solid, black = hole.
 function useDoorScreenTexture() {
@@ -34,9 +30,10 @@ function useDoorScreenTexture() {
 }
 
 /** panel: the control panel to mount on the microwave's face, or null when it's shown elsewhere (phones). */
-type Props = { on: boolean; panel: ReactNode; overlay: RefObject<HTMLDivElement> }
+type Props = { on: boolean; wreck: Wreck; panel: ReactNode; overlay: RefObject<HTMLDivElement> }
 
-export default function Microwave({ on, panel, overlay }: Props) {
+export default function Microwave({ on, wreck, panel, overlay }: Props) {
+  const root = useRef<THREE.Group>(null!)
   const turntable = useRef<THREE.Group>(null)
   const screen = useDoorScreenTexture()
   // Box faces are ordered +x, -x, +y, -y, +z, -z. The front (+z) is hidden; the door and panel cover it.
@@ -45,12 +42,50 @@ export default function Microwave({ on, panel, overlay }: Props) {
     return [m, m, m, m, new THREE.MeshBasicMaterial({ visible: false }), m]
   }, [])
 
+  // Explosion shake, and a brand-new microwave dropping in after it.
+  const shakeUntil = useRef(0)
+  const dropStart = useRef(-1)
+  const prevWreck = useRef(wreck)
+  // Layout effect, so the new microwave never renders a frame on the ground before dropping.
+  useLayoutEffect(() => {
+    const now = performance.now() / 1000
+    if (wreck === 'exploded') shakeUntil.current = now + 0.8
+    if (wreck === 'none' && prevWreck.current === 'exploded') dropStart.current = now
+    prevWreck.current = wreck
+  }, [wreck])
+
   useFrame((_, delta) => {
     if (on && turntable.current) turntable.current.rotation.y += delta * 0.8
+    const now = performance.now() / 1000
+
+    const shake = Math.max(0, shakeUntil.current - now) / 0.8
+    root.current.position.set((Math.random() - 0.5) * 0.5 * shake, (Math.random() - 0.5) * 0.5 * shake, 0)
+
+    if (dropStart.current >= 0) {
+      const t = Math.min(1, (now - dropStart.current) / 0.7)
+      root.current.position.y = 7 * (1 - t) * (1 - t) // falls in, landing as the ding plays
+      if (t === 1) dropStart.current = -1
+    }
   })
 
+  if (wreck === 'exploded') {
+    return (
+      <group ref={root}>
+        <Explosion />
+      </group>
+    )
+  }
+
   return (
-    <group>
+    <group ref={root}>
+      {wreck === 'arcing' && <Sparks />}
+      {wreck === 'fire' && (
+        <>
+          <Sparks />
+          <Fire />
+        </>
+      )}
+
       {/* Outer shell: one open-fronted box. Separate overlapping wall boxes put faces exactly
           on top of each other, and those fight for the same pixels (striped, flickering edges). */}
       <mesh material={shellMaterials}>
@@ -72,7 +107,7 @@ export default function Microwave({ on, panel, overlay }: Props) {
       <pointLight position={[CAVITY.x, 1.1, 0.3]} color="#ffd59a" intensity={on ? 14 : 0} decay={2} />
 
       {/* Turntable with the speaker on it */}
-      <group ref={turntable} position={[CAVITY.x, FLOOR_Y + 0.08, 0]}>
+      <group ref={turntable} position={[CAVITY.x, TURNTABLE_Y, 0]}>
         <mesh>
           <cylinderGeometry args={[1.35, 1.35, 0.04, 64]} />
           <meshStandardMaterial color="#a9c4c0" transparent opacity={0.55} roughness={0.1} depthWrite={false} />

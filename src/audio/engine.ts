@@ -100,7 +100,13 @@ export function keyBeep() {
 // Power level 1–10 sets how sealed-in the speaker sounds: 10 is fully muffled
 // (700 Hz cutoff), 1 barely (~8.4 kHz). Each level step multiplies the cutoff by ~1.3.
 let powerLevel = 10
-let muffle: { lp1: BiquadFilterNode; lp2: BiquadFilterNode; box: BiquadFilterNode } | null = null
+let muffle: {
+  lp1: BiquadFilterNode
+  lp2: BiquadFilterNode
+  box: BiquadFilterNode
+  shaper: WaveShaperNode // pass-through until the overload distorts it
+  gate: GainNode // the overload stutters the music with it
+} | null = null
 function applyPowerLevel(at: number) {
   if (!muffle) return
   const cutoff = 700 * 12 ** ((10 - powerLevel) / 9)
@@ -212,10 +218,14 @@ function getPlayer(): HTMLAudioElement {
   const wet = c.createGain()
   wet.gain.value = 0.25
 
-  src.connect(lp1).connect(lp2).connect(box)
-  box.connect(dry).connect(master)
-  box.connect(reverb).connect(wet).connect(master)
-  muffle = { lp1, lp2, box }
+  const shaper = c.createWaveShaper()
+  shaper.oversample = '4x'
+  const gate = c.createGain()
+
+  src.connect(lp1).connect(lp2).connect(box).connect(shaper).connect(gate)
+  gate.connect(dry).connect(master)
+  gate.connect(reverb).connect(wet).connect(master)
+  muffle = { lp1, lp2, box, shaper, gate }
   applyPowerLevel(c.currentTime)
   return player
 }
@@ -274,5 +284,161 @@ export function play(url: string, onEnded: () => void): Song {
       el.removeAttribute('src')
       el.load() // drops the stream connection
     },
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Overload: arcing (0–3 s) → fire (3–6.5 s) → explode() at OVERLOAD_BOOM_AT.
+
+export const OVERLOAD_FIRE_AT = 3
+export const OVERLOAD_BOOM_AT = 6.5
+
+let overloadNodes: AudioScheduledSourceNode[] = []
+let tinnitus: { osc: OscillatorNode; gain: GainNode } | null = null
+
+function distortionCurve(amount: number): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(1024)
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i / (curve.length - 1)) * 2 - 1
+    curve[i] = ((1 + amount) * x) / (1 + amount * Math.abs(x))
+  }
+  return curve
+}
+
+/** A short burst of filtered noise: an electric crackle, a thud, or a boom depending on settings. */
+function noiseHit(at: number, length: number, volume: number, type: BiquadFilterType, freq: number) {
+  const c = audio()
+  const src = c.createBufferSource()
+  src.buffer = noiseBuffer(c, length)
+  const filter = c.createBiquadFilter()
+  filter.type = type
+  filter.frequency.value = freq
+  const g = c.createGain()
+  g.gain.setValueAtTime(volume, at)
+  g.gain.exponentialRampToValueAtTime(0.001, at + length)
+  src.connect(filter).connect(g).connect(master)
+  src.start(at)
+  overloadNodes.push(src)
+}
+
+/** DO NOT PRESS: everything that leads up to the explosion, scheduled from now. */
+export function startOverload() {
+  const c = audio()
+  const t0 = c.currentTime
+  getPlayer() // make sure the music chain exists so it can be distorted
+  if (!hum) startHum()
+
+  // The magnetron strains: hum pitch climbs.
+  for (const n of hum!.nodes) {
+    const param = n instanceof OscillatorNode ? n.frequency : n.playbackRate
+    param.setValueAtTime(param.value, t0)
+    param.linearRampToValueAtTime(param.value * 1.8, t0 + OVERLOAD_BOOM_AT)
+  }
+
+  // The song distorts and stutters.
+  if (muffle) {
+    muffle.shaper.curve = distortionCurve(60)
+    const gate = muffle.gate.gain
+    gate.cancelScheduledValues(t0)
+    for (let t = t0; t < t0 + OVERLOAD_BOOM_AT; t += 0.06 + Math.random() * 0.12) {
+      gate.setValueAtTime(Math.random() < 0.35 ? 0.05 : 1, t)
+    }
+  }
+
+  // Electric crackles, getting denser.
+  for (let t = 0.05; t < OVERLOAD_BOOM_AT; t += 0.04 + Math.random() * (0.25 - (t / OVERLOAD_BOOM_AT) * 0.2)) {
+    noiseHit(t0 + t, 0.015 + Math.random() * 0.03, 0.15 + Math.random() * 0.35, 'highpass', 2000 + Math.random() * 4000)
+  }
+
+  // Fire: a roaring, crackling rumble that swells until the boom.
+  const roar = c.createBufferSource()
+  roar.buffer = noiseBuffer(c, 2)
+  roar.loop = true
+  const roarFilter = c.createBiquadFilter()
+  roarFilter.type = 'lowpass'
+  roarFilter.frequency.value = 700
+  const roarGain = c.createGain()
+  roarGain.gain.setValueAtTime(0, t0 + OVERLOAD_FIRE_AT)
+  roarGain.gain.linearRampToValueAtTime(0.35, t0 + OVERLOAD_BOOM_AT)
+  roar.connect(roarFilter).connect(roarGain).connect(master)
+  roar.start(t0 + OVERLOAD_FIRE_AT)
+  overloadNodes.push(roar)
+
+  // Smoke alarm-style beeping once it's on fire.
+  for (let t = OVERLOAD_FIRE_AT; t < OVERLOAD_BOOM_AT - 0.1; t += 0.22) beep(t0 + t, 0.11, 2900)
+}
+
+/** The boom: cuts everything, then debris clatter and a ringing in your ears. */
+export function explode() {
+  const c = audio()
+  const t0 = c.currentTime
+
+  for (const n of overloadNodes) {
+    try {
+      n.stop(t0)
+    } catch {
+      // never started (scheduled past now) or already stopped
+    }
+  }
+  overloadNodes = []
+  if (hum) {
+    hum.nodes.forEach((n) => n.stop(t0))
+    hum = null
+  }
+
+  // Boom: a long, dark noise blast plus a falling sub-bass thump.
+  noiseHit(t0, 2.5, 0.9, 'lowpass', 500)
+  const sub = c.createOscillator()
+  sub.frequency.setValueAtTime(80, t0)
+  sub.frequency.exponentialRampToValueAtTime(28, t0 + 0.9)
+  const subGain = c.createGain()
+  subGain.gain.setValueAtTime(0.9, t0)
+  subGain.gain.exponentialRampToValueAtTime(0.001, t0 + 1.2)
+  sub.connect(subGain).connect(master)
+  sub.start(t0)
+  sub.stop(t0 + 1.2)
+
+  // Pieces landing.
+  for (let i = 0; i < 7; i++) noiseHit(t0 + 0.7 + Math.random() * 1.4, 0.08, 0.3 + Math.random() * 0.3, 'lowpass', 400 + Math.random() * 900)
+
+  // Tinnitus.
+  const osc = c.createOscillator()
+  osc.frequency.value = 4200
+  const gain = c.createGain()
+  gain.gain.setValueAtTime(0, t0)
+  gain.gain.linearRampToValueAtTime(0.025, t0 + 0.3)
+  gain.gain.setValueAtTime(0.025, t0 + 2)
+  gain.gain.linearRampToValueAtTime(0, t0 + 7)
+  osc.connect(gain).connect(master)
+  osc.start(t0)
+  osc.stop(t0 + 7)
+  tinnitus = { osc, gain }
+}
+
+/** A brand-new microwave: undo the damage to the audio chain, and ding. */
+export function resetAfterExplosion() {
+  const c = audio()
+  const now = c.currentTime
+  if (tinnitus) {
+    tinnitus.gain.gain.cancelScheduledValues(now)
+    tinnitus.gain.gain.setTargetAtTime(0, now, 0.05)
+    tinnitus = null
+  }
+  if (muffle) {
+    muffle.shaper.curve = null
+    muffle.gate.gain.cancelScheduledValues(now)
+    muffle.gate.gain.setValueAtTime(1, now)
+  }
+  // Ding (lands after the drop-in animation).
+  for (const [freq, vol] of [[1318, 0.12], [1975, 0.05]]) {
+    const o = c.createOscillator()
+    o.frequency.value = freq
+    const g = c.createGain()
+    g.gain.setValueAtTime(0, now + 0.7)
+    g.gain.linearRampToValueAtTime(vol, now + 0.71)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 2.2)
+    o.connect(g).connect(master)
+    o.start(now + 0.7)
+    o.stop(now + 2.3)
   }
 }
