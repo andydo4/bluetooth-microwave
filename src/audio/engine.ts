@@ -92,11 +92,17 @@ function boxImpulse(c: AudioContext): AudioBuffer {
   return buf
 }
 
-/** Press START: beep, then the microwave hums until powerOff(). */
+/** Press START: beep, then the microwave hums until powerOff(). Must be called from the tap/click. */
 export function powerOn() {
   const c = audio()
   beep(c.currentTime)
   if (!hum) startHum()
+
+  // iPhone Safari only lets audio start during the tap itself, but the song arrives seconds later.
+  // Playing a moment of silence now unlocks the player, so the song can start on it afterwards.
+  const el = getPlayer()
+  el.src = silence ??= silentWav()
+  el.play().catch(() => {})
 }
 
 /** Hum spins down, relay clunks, then the classic three end beeps. */
@@ -131,21 +137,38 @@ export function powerOff() {
   for (let i = 0; i < 3; i++) beep(now + 0.9 + i * 0.45, 0.25)
 }
 
-export type Song = {
-  /** Resolves when sound actually starts; rejects if the audio can't load. */
-  playing: Promise<void>
-  stop: () => void
+// 0.1 s of silence as a WAV file, used to unlock the player (see powerOn).
+let silence: string | undefined
+function silentWav(): string {
+  const rate = 8000
+  const samples = 800
+  const v = new DataView(new ArrayBuffer(44 + samples * 2))
+  const text = (at: number, s: string) => [...s].forEach((ch, i) => v.setUint8(at + i, ch.charCodeAt(0)))
+  text(0, 'RIFF')
+  v.setUint32(4, 36 + samples * 2, true)
+  text(8, 'WAVE')
+  text(12, 'fmt ')
+  v.setUint32(16, 16, true) // fmt chunk size
+  v.setUint16(20, 1, true) // PCM
+  v.setUint16(22, 1, true) // mono
+  v.setUint32(24, rate, true)
+  v.setUint32(28, rate * 2, true) // bytes per second
+  v.setUint16(32, 2, true) // bytes per frame
+  v.setUint16(34, 16, true) // bits per sample
+  text(36, 'data')
+  v.setUint32(40, samples * 2, true)
+  return URL.createObjectURL(new Blob([v.buffer], { type: 'audio/wav' }))
 }
 
-/**
- * Streams the song from `url` as if it's coming from a speaker shut inside the microwave.
- * Playback starts as soon as enough has buffered. onEnded fires when the song finishes
- * (or the stream breaks mid-song), not when stop() is called.
- */
-export function play(url: string, onEnded: () => void): Song {
+// One <audio> element for every song, wired through the muffle chain once.
+// Reusing it is what keeps the unlock from powerOn() working, and an element can
+// only be connected to Web Audio once anyway.
+let player: HTMLAudioElement | null = null
+function getPlayer(): HTMLAudioElement {
+  if (player) return player
   const c = audio()
-  const el = new Audio(url)
-  const src = c.createMediaElementSource(el)
+  player = new Audio()
+  const src = c.createMediaElementSource(player)
 
   // Two cascaded lowpasses (24 dB/oct) kill the highs like the door and walls would.
   const lp1 = c.createBiquadFilter()
@@ -171,24 +194,59 @@ export function play(url: string, onEnded: () => void): Song {
   src.connect(lp1).connect(lp2).connect(box)
   box.connect(dry).connect(master)
   box.connect(reverb).connect(wet).connect(master)
+  return player
+}
 
-  let started = false
+export type Song = {
+  /** Resolves when sound actually starts; rejects if the audio can't load. */
+  playing: Promise<void>
+  stop: () => void
+}
+
+/**
+ * Streams the song from `url` as if it's coming from a speaker shut inside the microwave.
+ * Playback starts as soon as enough has buffered. onEnded fires when the song finishes
+ * (or the stream breaks mid-song), not when stop() is called.
+ */
+export function play(url: string, onEnded: () => void): Song {
+  const el = getPlayer()
+  let cleanup = () => {}
+
   const playing = new Promise<void>((resolve, reject) => {
-    el.addEventListener('playing', () => {
+    let started = false
+    const onPlaying = () => {
       started = true
       resolve()
-    }, { once: true })
-    el.addEventListener('error', () => {
-      if (started) onEnded()
-      else reject(new Error('Could not play that audio.'))
+    }
+    const onEnd = () => {
+      cleanup()
+      onEnded()
+    }
+    const onError = () => {
+      if (started) return onEnd()
+      cleanup()
+      reject(new Error('Could not play that audio.'))
+    }
+    el.addEventListener('playing', onPlaying)
+    el.addEventListener('ended', onEnd)
+    el.addEventListener('error', onError)
+    cleanup = () => {
+      el.removeEventListener('playing', onPlaying)
+      el.removeEventListener('ended', onEnd)
+      el.removeEventListener('error', onError)
+    }
+
+    el.src = url
+    el.play().catch((e) => {
+      cleanup()
+      reject(e)
     })
-    el.play().catch(reject)
   })
-  el.addEventListener('ended', onEnded)
 
   return {
     playing,
     stop: () => {
+      cleanup()
       el.pause()
       el.removeAttribute('src')
       el.load() // drops the stream connection
