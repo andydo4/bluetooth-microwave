@@ -1,31 +1,16 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
-import type { Source, Status, Wreck } from '../App'
-import { keyBeep } from '../audio/engine'
+// The microwave's themed controls: LED display, presets, power keypad, link slot, START/STOP, DO NOT PRESS.
+import { useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import type { ControlsProps, PresetKey } from '../types'
+import { keyBeep } from '../../audio/engine'
+import { DoNotPress, displayText, isPulsing, useTick } from '../shared/led'
+import { WRECK_LABELS } from './labels'
 
-// Keys must match PRESETS in server/index.ts.
-const PRESETS = [
+const PRESETS: { key: PresetKey; label: string }[] = [
   { key: 'popcorn', label: 'POPCORN' },
   { key: 'defrost', label: 'DEFROST' },
   { key: 'reheat', label: 'REHEAT' },
   { key: 'beverage', label: 'BEVERAGE' },
 ]
-
-type Props = {
-  status: Status
-  endsAt: number
-  error: string
-  power: number
-  wreck: Wreck
-  onStart: (source: Source) => void
-  onStop: () => void
-  onPower: (level: number) => void
-  onOverload: () => void
-}
-
-function formatTime(ms: number) {
-  const s = Math.max(0, Math.ceil(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
 
 const key =
   'touch-manipulation rounded-sm border border-black/70 bg-zinc-800 text-zinc-200 shadow-[inset_0_1px_0_rgb(255_255_255/0.08),0_2px_0_#000] ' +
@@ -39,49 +24,9 @@ function Key({ children, className = '', ...props }: { children: ReactNode; clas
   )
 }
 
-type DisplayState = { status: Status; endsAt: number; error: string; wreck: Wreck }
-
-/** What the LED display reads. `flash` is a short-lived message like "PL 7". */
-function displayText({ status, endsAt, error, wreck }: DisplayState, flash = '') {
-  return wreck === 'exploded' ? '' // fried
-    : wreck === 'fire' ? 'FIRE'
-    : wreck === 'arcing' ? 'HOT'
-    : flash ? flash
-    : status === 'playing' ? formatTime(endsAt - Date.now())
-    : status === 'loading' ? 'COOK'
-    : error ? 'Err'
-    : 'READY'
-}
-
-function isPulsing({ status, wreck }: DisplayState, flash = '') {
-  return (status === 'loading' && !flash) || wreck === 'arcing' || wreck === 'fire'
-}
-
-/** Re-renders a few times a second while playing, so a countdown ticks. */
-function useTick(status: Status) {
-  const [, rerender] = useState(0)
-  useEffect(() => {
-    if (status !== 'playing') return
-    const id = setInterval(() => rerender((n) => n + 1), 250)
-    return () => clearInterval(id)
-  }, [status])
-}
-
-/** The LED readout on its own, for the phone's collapsed control bar. */
-export function MiniDisplay(props: DisplayState) {
-  useTick(props.status)
-  return (
-    <span
-      className={`font-dseg text-lg text-[#4dff88] [text-shadow:0_0_6px_#4dff88aa] ${isPulsing(props) ? 'animate-pulse' : ''}`}
-    >
-      {displayText(props)}
-    </span>
-  )
-}
-
-// Rendered on the microwave's face on desktop (see Microwave.tsx), or in a slide-up sheet on phones
+// Rendered on the microwave's face on desktop (see Model.tsx), or in a slide-up sheet on phones
 // (see App.tsx). Sizes step up when the panel is 300px+ wide, via container queries.
-export default function ControlPanel({ status, endsAt, error, power, wreck, onStart, onStop, onPower, onOverload }: Props) {
+export default function Controls({ status, endsAt, error, power, wreck, onStart, onStop, onPower, onOverload }: ControlsProps) {
   const [url, setUrl] = useState('')
   const [flash, setFlash] = useState('') // short-lived display message, like "PL 7"
   const flashTimer = useRef(0)
@@ -110,7 +55,7 @@ export default function ControlPanel({ status, endsAt, error, power, wreck, onSt
     }
   }
 
-  const state = { status, endsAt, error, wreck }
+  const state = { status, endsAt, error, wreck, wreckLabels: WRECK_LABELS }
 
   return (
     <form
@@ -204,15 +149,7 @@ export default function ControlPanel({ status, endsAt, error, power, wreck, onSt
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={onOverload}
-          className="h-9 @min-[300px]:h-11 touch-manipulation rounded-sm bg-[repeating-linear-gradient(-45deg,#e8b400_0_10px,#151515_10px_20px)] p-[3px] shadow-[0_2px_0_#000] active:translate-y-px disabled:opacity-40"
-        >
-          <span className="flex h-full items-center justify-center rounded-[2px] bg-[#151515] text-[10px] font-extrabold tracking-[0.25em] text-[#e8b400]">
-            DO NOT PRESS
-          </span>
-        </button>
+        <DoNotPress onPress={onOverload} className="h-9 @min-[300px]:h-11" />
       </fieldset>
 
       {error && <p className="text-[11px] leading-snug text-red-400">{error}</p>}

@@ -1,11 +1,13 @@
-import { useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react'
+// The microwave: shell, glowing cavity, turntable + speaker, dotted door, control panel mount.
+// During the overload it shows sparks, then fire; when exploded it's replaced by its debris.
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import Speaker from './Speaker'
-import { Explosion, Fire, Sparks } from './Mayhem'
+import { Explosion, Fire, Sparks } from './effects'
 import { BLACK, CAVITY, DOOR, METAL, TURNTABLE_Y } from './dims'
-import type { Wreck } from '../App'
+import type { ModelProps } from '../types'
 
 const metal = <meshStandardMaterial {...METAL} />
 const black = <meshStandardMaterial {...BLACK} />
@@ -29,10 +31,7 @@ function useDoorScreenTexture() {
   }, [])
 }
 
-/** panel: the control panel to mount on the microwave's face, or null when it's shown elsewhere (phones). */
-type Props = { on: boolean; wreck: Wreck; panel: ReactNode; overlay: RefObject<HTMLDivElement> }
-
-export default function Microwave({ on, wreck, panel, overlay }: Props) {
+export default function Model({ on, wreck, transition, panel, overlay }: ModelProps) {
   const root = useRef<THREE.Group>(null!)
   const turntable = useRef<THREE.Group>(null)
   const screen = useDoorScreenTexture()
@@ -71,15 +70,15 @@ export default function Microwave({ on, wreck, panel, overlay }: Props) {
   if (wreck === 'exploded') {
     return (
       <group ref={root}>
-        <Explosion />
+        <Explosion glow={transition === 'out'} />
       </group>
     )
   }
 
   return (
     <group ref={root}>
-      {wreck === 'arcing' && <Sparks />}
-      {wreck === 'fire' && (
+      {wreck === 'overloading' && <Sparks />}
+      {wreck === 'critical' && (
         <>
           <Sparks />
           <Fire />

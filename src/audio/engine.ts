@@ -1,82 +1,100 @@
-// All microwave sounds are synthesized; the song goes through a "closed metal box" filter chain.
+// The sound engine: one shared music player + "muffle" chain, power on/off, the overload framework
+// and the explosion. Everything is synthesized with Web Audio (no sound files).
+// Each level supplies a LevelSound profile (its hum, muffle character, end signal and overload
+// noises); see src/levels/*/sound.ts. Call setLevelSound() when the level changes.
 
 let ctx: AudioContext | null = null
 let master: GainNode
-let hum: { nodes: (OscillatorNode | AudioBufferSourceNode)[]; gain: GainNode } | null = null
 
-function audio(): AudioContext {
+/** The shared AudioContext. Must be first called from a tap/click, or browsers keep it suspended. */
+export function audio(): AudioContext {
   if (!ctx) {
     ctx = new AudioContext()
     master = ctx.createGain()
     master.gain.value = 0.9
     master.connect(ctx.destination)
   }
-  // Must be called from a click handler the first time, or browsers keep it suspended.
   void ctx.resume()
   return ctx
 }
 
-function noiseBuffer(c: AudioContext, seconds: number): AudioBuffer {
+/** Where level sounds connect to. */
+export function out(): AudioNode {
+  audio()
+  return master
+}
+
+export function noiseBuffer(c: AudioContext, seconds: number): AudioBuffer {
   const buf = c.createBuffer(1, c.sampleRate * seconds, c.sampleRate)
   const data = buf.getChannelData(0)
   for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
   return buf
 }
 
-function beep(at: number, length = 0.14, freq = 1850) {
+export function beep(at: number, length = 0.14, freq = 1850, type: OscillatorType = 'square', volume = 0.06) {
   const c = audio()
   const osc = c.createOscillator()
   const g = c.createGain()
-  osc.type = 'square'
+  osc.type = type
   osc.frequency.value = freq
   g.gain.setValueAtTime(0, at)
-  g.gain.linearRampToValueAtTime(0.06, at + 0.005)
-  g.gain.setValueAtTime(0.06, at + length - 0.01)
+  g.gain.linearRampToValueAtTime(volume, at + 0.005)
+  g.gain.setValueAtTime(volume, at + length - 0.01)
   g.gain.linearRampToValueAtTime(0, at + length)
   osc.connect(g).connect(master)
   osc.start(at)
   osc.stop(at + length)
 }
 
-// Magnetron/transformer buzz + fan noise. Not muffled: it's the microwave itself.
-function startHum() {
-  const c = audio()
-  const gain = c.createGain()
-  gain.gain.setValueAtTime(0, c.currentTime)
-  gain.gain.linearRampToValueAtTime(1, c.currentTime + 0.25)
-  gain.connect(master)
-
-  const buzz = c.createOscillator()
-  buzz.type = 'sawtooth'
-  buzz.frequency.value = 120
-  const buzzFilter = c.createBiquadFilter()
-  buzzFilter.type = 'lowpass'
-  buzzFilter.frequency.value = 450
-  const buzzGain = c.createGain()
-  buzzGain.gain.value = 0.06
-  buzz.connect(buzzFilter).connect(buzzGain).connect(gain)
-
-  const mains = c.createOscillator()
-  mains.frequency.value = 60
-  const mainsGain = c.createGain()
-  mainsGain.gain.value = 0.12
-  mains.connect(mainsGain).connect(gain)
-
-  const fan = c.createBufferSource()
-  fan.buffer = noiseBuffer(c, 2)
-  fan.loop = true
-  const fanFilter = c.createBiquadFilter()
-  fanFilter.type = 'bandpass'
-  fanFilter.frequency.value = 600
-  fanFilter.Q.value = 0.6
-  const fanGain = c.createGain()
-  fanGain.gain.value = 0.05
-  fan.connect(fanFilter).connect(fanGain).connect(gain)
-
-  const nodes = [buzz, mains, fan]
-  nodes.forEach((n) => n.start())
-  hum = { nodes, gain }
+/** Sources started for the overload; all stopped at the explosion. */
+let overloadNodes: AudioScheduledSourceNode[] = []
+export function track<T extends AudioScheduledSourceNode>(node: T): T {
+  overloadNodes.push(node)
+  return node
 }
+
+/** A short burst of filtered noise: a crackle, a thud, a splash or a boom depending on settings. */
+export function noiseHit(at: number, length: number, volume: number, type: BiquadFilterType, freq: number) {
+  const c = audio()
+  const src = c.createBufferSource()
+  src.buffer = noiseBuffer(c, length)
+  const filter = c.createBiquadFilter()
+  filter.type = type
+  filter.frequency.value = freq
+  const g = c.createGain()
+  g.gain.setValueAtTime(volume, at)
+  g.gain.exponentialRampToValueAtTime(0.001, at + length)
+  src.connect(filter).connect(g).connect(master)
+  src.start(at)
+  track(src)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Level sound profiles
+
+export type HumNode = OscillatorNode | AudioBufferSourceNode
+
+export type LevelSound = {
+  /** Lowpass cutoff (Hz) at power level 10, i.e. fully sealed in. Optional wobble makes it slosh. */
+  muffle: { cutoff: number; wobbleHz?: number; wobbleDepth?: number }
+  /** The machine's running sound, connected to `dest`. Return the sources; the engine starts them. */
+  hum(c: AudioContext, dest: AudioNode): HumNode[]
+  /** The "done" signal after power-down (microwave beeps, washer chime...), at time `at`. */
+  endSignal(at: number): void
+  /** Level-specific overload sounds scheduled from t0. Register sources with track() / noiseHit(). */
+  overload(t0: number): void
+  /** Extra sounds layered on the generic boom. */
+  explodeExtra?(t0: number): void
+}
+
+let level: LevelSound | null = null
+export function setLevelSound(sound: LevelSound) {
+  level = sound
+  if (ctx) applyMuffle(ctx.currentTime)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The shared music player and muffle chain
 
 // Short, bright decay: what a small metal cavity adds to a sound.
 function boxImpulse(c: AudioContext): AudioBuffer {
@@ -92,76 +110,83 @@ function boxImpulse(c: AudioContext): AudioBuffer {
   return buf
 }
 
-/** The short chirp each panel key makes. */
-export function keyBeep() {
-  beep(audio().currentTime, 0.07, 2100)
-}
-
-// Power level 1–10 sets how sealed-in the speaker sounds: 10 is fully muffled
-// (700 Hz cutoff), 1 barely (~8.4 kHz). Each level step multiplies the cutoff by ~1.3.
+// Power level 1–10 sets how sealed-in the speaker sounds: 10 is fully muffled (the level's
+// cutoff, 700 Hz for the microwave), 1 barely (12× higher). Each step multiplies the cutoff by ~1.3.
 let powerLevel = 10
+let clear = false // after an explosion the speaker is out in the open: no muffling
 let muffle: {
   lp1: BiquadFilterNode
   lp2: BiquadFilterNode
   box: BiquadFilterNode
   shaper: WaveShaperNode // pass-through until the overload distorts it
   gate: GainNode // the overload stutters the music with it
+  wet: GainNode
+  wobble: OscillatorNode // sloshing cutoff (washer); depth 0 when unused
+  wobbleDepth: GainNode
 } | null = null
-function applyPowerLevel(at: number) {
+
+function applyMuffle(at: number) {
   if (!muffle) return
-  const cutoff = 700 * 12 ** ((10 - powerLevel) / 9)
+  const m = level?.muffle ?? { cutoff: 700 }
+  const cutoff = clear ? 16000 : m.cutoff * 12 ** ((10 - powerLevel) / 9)
   muffle.lp1.frequency.setTargetAtTime(cutoff, at, 0.05)
   muffle.lp2.frequency.setTargetAtTime(cutoff * 1.3, at, 0.05)
-  muffle.box.gain.setTargetAtTime(5 * (powerLevel / 10), at, 0.05)
-}
-export function setPowerLevel(level: number) {
-  powerLevel = level
-  if (ctx) applyPowerLevel(ctx.currentTime)
+  muffle.box.gain.setTargetAtTime(clear ? 0 : 5 * (powerLevel / 10), at, 0.05)
+  muffle.wet.gain.setTargetAtTime(clear ? 0.05 : 0.25, at, 0.05)
+  muffle.wobble.frequency.setTargetAtTime(m.wobbleHz ?? 1, at, 0.05)
+  muffle.wobbleDepth.gain.setTargetAtTime(clear ? 0 : (m.wobbleDepth ?? 0) * (powerLevel / 10), at, 0.05)
 }
 
-/** Press START: beep, then the microwave hums until powerOff(). Must be called from the tap/click. */
-export function powerOn() {
+export function setPowerLevel(levelNumber: number) {
+  powerLevel = levelNumber
+  if (ctx) applyMuffle(ctx.currentTime)
+}
+
+// One <audio> element for every song, wired through the muffle chain once.
+// Reusing it is what keeps the unlock from powerOn() working, and an element can
+// only be connected to Web Audio once anyway.
+let player: HTMLAudioElement | null = null
+function getPlayer(): HTMLAudioElement {
+  if (player) return player
   const c = audio()
-  beep(c.currentTime)
-  if (!hum) startHum()
+  player = new Audio()
+  const src = c.createMediaElementSource(player)
 
-  // iPhone Safari only lets audio start during the tap itself, but the song arrives seconds later.
-  // Playing a moment of silence now unlocks the player, so the song can start on it afterwards.
-  const el = getPlayer()
-  el.src = silence ??= silentWav()
-  el.play().catch(() => {})
-}
+  // Two cascaded lowpasses (24 dB/oct) kill the highs like the door and walls would.
+  const lp1 = c.createBiquadFilter()
+  lp1.type = 'lowpass'
+  const lp2 = c.createBiquadFilter()
+  lp2.type = 'lowpass'
+  // Boxy resonance from the cavity.
+  const box = c.createBiquadFilter()
+  box.type = 'peaking'
+  box.frequency.value = 320
+  box.Q.value = 2
 
-/** Hum spins down, relay clunks, then the classic three end beeps. */
-export function powerOff() {
-  const c = audio()
-  const now = c.currentTime
-  if (hum) {
-    const { nodes, gain } = hum
-    hum = null
-    for (const n of nodes) {
-      const param = n instanceof OscillatorNode ? n.frequency : n.playbackRate
-      param.setValueAtTime(param.value, now)
-      param.exponentialRampToValueAtTime(param.value * 0.6, now + 0.7)
-      n.stop(now + 0.75)
-    }
-    gain.gain.setValueAtTime(1, now)
-    gain.gain.linearRampToValueAtTime(0, now + 0.7)
-  }
+  const wobble = c.createOscillator()
+  const wobbleDepth = c.createGain()
+  wobbleDepth.gain.value = 0
+  wobble.connect(wobbleDepth)
+  wobbleDepth.connect(lp1.frequency)
+  wobbleDepth.connect(lp2.frequency)
+  wobble.start()
 
-  // Relay clunk
-  const clunk = c.createBufferSource()
-  clunk.buffer = noiseBuffer(c, 0.05)
-  const clunkFilter = c.createBiquadFilter()
-  clunkFilter.type = 'lowpass'
-  clunkFilter.frequency.value = 250
-  const clunkGain = c.createGain()
-  clunkGain.gain.setValueAtTime(0.8, now + 0.05)
-  clunkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1)
-  clunk.connect(clunkFilter).connect(clunkGain).connect(master)
-  clunk.start(now + 0.05)
+  const dry = c.createGain()
+  dry.gain.value = 0.8
+  const reverb = c.createConvolver()
+  reverb.buffer = boxImpulse(c)
+  const wet = c.createGain()
 
-  for (let i = 0; i < 3; i++) beep(now + 0.9 + i * 0.45, 0.25)
+  const shaper = c.createWaveShaper()
+  shaper.oversample = '4x'
+  const gate = c.createGain()
+
+  src.connect(lp1).connect(lp2).connect(box).connect(shaper).connect(gate)
+  gate.connect(dry).connect(master)
+  gate.connect(reverb).connect(wet).connect(master)
+  muffle = { lp1, lp2, box, shaper, gate, wet, wobble, wobbleDepth }
+  applyMuffle(c.currentTime)
+  return player
 }
 
 // 0.1 s of silence as a WAV file, used to unlock the player (see powerOn).
@@ -187,49 +212,6 @@ function silentWav(): string {
   return URL.createObjectURL(new Blob([v.buffer], { type: 'audio/wav' }))
 }
 
-// One <audio> element for every song, wired through the muffle chain once.
-// Reusing it is what keeps the unlock from powerOn() working, and an element can
-// only be connected to Web Audio once anyway.
-let player: HTMLAudioElement | null = null
-function getPlayer(): HTMLAudioElement {
-  if (player) return player
-  const c = audio()
-  player = new Audio()
-  const src = c.createMediaElementSource(player)
-
-  // Two cascaded lowpasses (24 dB/oct) kill the highs like the door and walls would.
-  const lp1 = c.createBiquadFilter()
-  lp1.type = 'lowpass'
-  lp1.frequency.value = 700
-  const lp2 = c.createBiquadFilter()
-  lp2.type = 'lowpass'
-  lp2.frequency.value = 900
-  // Boxy resonance from the cavity.
-  const box = c.createBiquadFilter()
-  box.type = 'peaking'
-  box.frequency.value = 320
-  box.Q.value = 2
-  box.gain.value = 5
-
-  const dry = c.createGain()
-  dry.gain.value = 0.8
-  const reverb = c.createConvolver()
-  reverb.buffer = boxImpulse(c)
-  const wet = c.createGain()
-  wet.gain.value = 0.25
-
-  const shaper = c.createWaveShaper()
-  shaper.oversample = '4x'
-  const gate = c.createGain()
-
-  src.connect(lp1).connect(lp2).connect(box).connect(shaper).connect(gate)
-  gate.connect(dry).connect(master)
-  gate.connect(reverb).connect(wet).connect(master)
-  muffle = { lp1, lp2, box, shaper, gate }
-  applyPowerLevel(c.currentTime)
-  return player
-}
-
 export type Song = {
   /** Resolves when sound actually starts; rejects if the audio can't load. */
   playing: Promise<void>
@@ -237,7 +219,7 @@ export type Song = {
 }
 
 /**
- * Streams the song from `url` as if it's coming from a speaker shut inside the microwave.
+ * Streams the song from `url` as if it's coming from a speaker shut inside the machine.
  * Playback starts as soon as enough has buffered. onEnded fires when the song finishes
  * (or the stream breaks mid-song), not when stop() is called.
  */
@@ -288,12 +270,79 @@ export function play(url: string, onEnded: () => void): Song {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Overload: arcing (0–3 s) → fire (3–6.5 s) → explode() at OVERLOAD_BOOM_AT.
+// Power
 
-export const OVERLOAD_FIRE_AT = 3
+let hum: { nodes: HumNode[]; gain: GainNode } | null = null
+
+function startHum() {
+  if (!level) return
+  const c = audio()
+  const gain = c.createGain()
+  gain.gain.setValueAtTime(0, c.currentTime)
+  gain.gain.linearRampToValueAtTime(1, c.currentTime + 0.25)
+  gain.connect(master)
+  const nodes = level.hum(c, gain)
+  nodes.forEach((n) => n.start())
+  hum = { nodes, gain }
+}
+
+/** The short chirp each panel key makes. */
+export function keyBeep() {
+  beep(audio().currentTime, 0.07, 2100)
+}
+
+/** Press START: beep, then the machine runs until powerOff(). Must be called from the tap/click. */
+export function powerOn() {
+  const c = audio()
+  beep(c.currentTime)
+  if (!hum) startHum()
+
+  // iPhone Safari only lets audio start during the tap itself, but the song arrives seconds later.
+  // Playing a moment of silence now unlocks the player, so the song can start on it afterwards.
+  const el = getPlayer()
+  el.src = silence ??= silentWav()
+  el.play().catch(() => {})
+}
+
+/** The machine winds down (every hum source's pitch drops), a relay clunks, then the level's end signal. */
+export function powerOff() {
+  const c = audio()
+  const now = c.currentTime
+  if (hum) {
+    const { nodes, gain } = hum
+    hum = null
+    for (const n of nodes) {
+      const param = n instanceof OscillatorNode ? n.frequency : n.playbackRate
+      param.setValueAtTime(param.value, now)
+      param.exponentialRampToValueAtTime(Math.max(param.value * 0.6, 0.01), now + 0.7)
+      n.stop(now + 0.75)
+    }
+    gain.gain.setValueAtTime(1, now)
+    gain.gain.linearRampToValueAtTime(0, now + 0.7)
+  }
+
+  // Relay clunk
+  const clunk = c.createBufferSource()
+  clunk.buffer = noiseBuffer(c, 0.05)
+  const clunkFilter = c.createBiquadFilter()
+  clunkFilter.type = 'lowpass'
+  clunkFilter.frequency.value = 250
+  const clunkGain = c.createGain()
+  clunkGain.gain.setValueAtTime(0.8, now + 0.05)
+  clunkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1)
+  clunk.connect(clunkFilter).connect(clunkGain).connect(master)
+  clunk.start(now + 0.05)
+
+  level?.endSignal(now + 0.9)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Overload: stage 1 "overloading" (0–3 s) → stage 2 "critical" (3–6.5 s) → explode() at OVERLOAD_BOOM_AT.
+// The same timeline for every level; App's timers use these constants so sound and visuals line up.
+
+export const OVERLOAD_CRITICAL_AT = 3
 export const OVERLOAD_BOOM_AT = 6.5
 
-let overloadNodes: AudioScheduledSourceNode[] = []
 let tinnitus: { osc: OscillatorNode; gain: GainNode } | null = null
 
 function distortionCurve(amount: number): Float32Array<ArrayBuffer> {
@@ -305,22 +354,6 @@ function distortionCurve(amount: number): Float32Array<ArrayBuffer> {
   return curve
 }
 
-/** A short burst of filtered noise: an electric crackle, a thud, or a boom depending on settings. */
-function noiseHit(at: number, length: number, volume: number, type: BiquadFilterType, freq: number) {
-  const c = audio()
-  const src = c.createBufferSource()
-  src.buffer = noiseBuffer(c, length)
-  const filter = c.createBiquadFilter()
-  filter.type = type
-  filter.frequency.value = freq
-  const g = c.createGain()
-  g.gain.setValueAtTime(volume, at)
-  g.gain.exponentialRampToValueAtTime(0.001, at + length)
-  src.connect(filter).connect(g).connect(master)
-  src.start(at)
-  overloadNodes.push(src)
-}
-
 /** DO NOT PRESS: everything that leads up to the explosion, scheduled from now. */
 export function startOverload() {
   const c = audio()
@@ -328,8 +361,8 @@ export function startOverload() {
   getPlayer() // make sure the music chain exists so it can be distorted
   if (!hum) startHum()
 
-  // The magnetron strains: hum pitch climbs.
-  for (const n of hum!.nodes) {
+  // The machine strains: its hum pitch climbs.
+  for (const n of hum?.nodes ?? []) {
     const param = n instanceof OscillatorNode ? n.frequency : n.playbackRate
     param.setValueAtTime(param.value, t0)
     param.linearRampToValueAtTime(param.value * 1.8, t0 + OVERLOAD_BOOM_AT)
@@ -345,30 +378,13 @@ export function startOverload() {
     }
   }
 
-  // Electric crackles, getting denser.
-  for (let t = 0.05; t < OVERLOAD_BOOM_AT; t += 0.04 + Math.random() * (0.25 - (t / OVERLOAD_BOOM_AT) * 0.2)) {
-    noiseHit(t0 + t, 0.015 + Math.random() * 0.03, 0.15 + Math.random() * 0.35, 'highpass', 2000 + Math.random() * 4000)
-  }
-
-  // Fire: a roaring, crackling rumble that swells until the boom.
-  const roar = c.createBufferSource()
-  roar.buffer = noiseBuffer(c, 2)
-  roar.loop = true
-  const roarFilter = c.createBiquadFilter()
-  roarFilter.type = 'lowpass'
-  roarFilter.frequency.value = 700
-  const roarGain = c.createGain()
-  roarGain.gain.setValueAtTime(0, t0 + OVERLOAD_FIRE_AT)
-  roarGain.gain.linearRampToValueAtTime(0.35, t0 + OVERLOAD_BOOM_AT)
-  roar.connect(roarFilter).connect(roarGain).connect(master)
-  roar.start(t0 + OVERLOAD_FIRE_AT)
-  overloadNodes.push(roar)
-
-  // Smoke alarm-style beeping once it's on fire.
-  for (let t = OVERLOAD_FIRE_AT; t < OVERLOAD_BOOM_AT - 0.1; t += 0.22) beep(t0 + t, 0.11, 2900)
+  level?.overload(t0)
 }
 
-/** The boom: cuts everything, then debris clatter and a ringing in your ears. */
+/**
+ * The boom: cuts the machine's sounds, then debris clatter and a ringing in your ears.
+ * The speaker survives: a playing song carries on, now un-muffled (it's out in the open).
+ */
 export function explode() {
   const c = audio()
   const t0 = c.currentTime
@@ -386,6 +402,17 @@ export function explode() {
     hum = null
   }
 
+  // The speaker, out in the open: no muffle, no distortion, no stutter.
+  clear = true
+  if (muffle) {
+    muffle.shaper.curve = null
+    muffle.gate.gain.cancelScheduledValues(t0)
+    // Knocked out by the blast for a beat, then back.
+    muffle.gate.gain.setValueAtTime(0, t0)
+    muffle.gate.gain.linearRampToValueAtTime(1, t0 + 1.5)
+  }
+  applyMuffle(t0)
+
   // Boom: a long, dark noise blast plus a falling sub-bass thump.
   noiseHit(t0, 2.5, 0.9, 'lowpass', 500)
   const sub = c.createOscillator()
@@ -401,6 +428,8 @@ export function explode() {
   // Pieces landing.
   for (let i = 0; i < 7; i++) noiseHit(t0 + 0.7 + Math.random() * 1.4, 0.08, 0.3 + Math.random() * 0.3, 'lowpass', 400 + Math.random() * 900)
 
+  level?.explodeExtra?.(t0)
+
   // Tinnitus.
   const osc = c.createOscillator()
   osc.frequency.value = 4200
@@ -415,7 +444,7 @@ export function explode() {
   tinnitus = { osc, gain }
 }
 
-/** A brand-new microwave: undo the damage to the audio chain, and ding. */
+/** A brand-new machine (same level or the next one): undo the damage to the audio chain, and ding. */
 export function resetAfterExplosion() {
   const c = audio()
   const now = c.currentTime
@@ -424,11 +453,13 @@ export function resetAfterExplosion() {
     tinnitus.gain.gain.setTargetAtTime(0, now, 0.05)
     tinnitus = null
   }
+  clear = false
   if (muffle) {
     muffle.shaper.curve = null
     muffle.gate.gain.cancelScheduledValues(now)
     muffle.gate.gain.setValueAtTime(1, now)
   }
+  applyMuffle(now)
   // Ding (lands after the drop-in animation).
   for (const [freq, vol] of [[1318, 0.12], [1975, 0.05]]) {
     const o = c.createOscillator()

@@ -1,4 +1,6 @@
-# Levels plan (agreed with Andy, October 8 2026; not built yet)
+# Levels plan (agreed with Andy, October 8 2026)
+
+**Status:** the shared systems below are built, plus levels 1 (Microwave) and 2 (Washing machine). Next: Andy approves the washer's look and feel, then elevator, car and data center (can be built in parallel, each in its own `src/levels/<id>/` folder; see "Adding a level" in ARCHITECTURE.md).
 
 After the microwave explodes, you can **upgrade to a bigger thing** that can also blow up, escalating from the kitchen to the whole universe. Each level has its own object, an upgraded speaker, themed controls, its own sound and its own explosion.
 
@@ -7,7 +9,7 @@ After the microwave explodes, you can **upgrade to a bigger thing** that can als
 | # | Level | Speaker (levels up each time) | Themed controls | Preset labels (same 4 songs) | Signature twist | Explosion | Damage bill |
 |---|---|---|---|---|---|---|---|
 | 1 | **Microwave** ✅ built | Small portable cylinder speaker | Microwave keypad + LED | POPCORN / DEFROST / REHEAT / BEVERAGE | Turntable spins; power level = muffle amount | Sparks → fire → debris | $89 |
-| 2 | **Washing machine** | Boombox | Big cycle dial + LED | DELICATE / HEAVY / RINSE / SPIN | **The speaker tumbles in the drum**; music sounds wet and sloshy | Floods the room with foam and suds | $649 |
+| 2 | **Washing machine** ✅ built | Boombox | Big cycle dial + LED; WATER LEVEL LOW/MED/HIGH = power | DELICATE / HEAVY / RINSE / SPIN | **The speaker tumbles in the drum**; music sounds wet and sloshy (wobbling cutoff) | `UE` rattle → `SUDS` foams over → foam blanket | $649 |
 | 3 | **Elevator** | *Proposed:* hi-fi floor-standing speaker tower (confirm with Andy) | Brass floor-button panel + floor counter + door open/close + red alarm bell | *Proposed:* floor buttons (e.g. LOBBY / 2 / 3 / PENTHOUSE) | Your song becomes **elevator music**: muffled, echoing in a metal shaft; the floor counter climbs as it plays | The cable snaps, sparks run down the shaft, the car plummets and crashes, the doors blow off | $48,000 |
 | 4 | **Car** | Trunk subwoofer stack | Car-stereo head unit | AM / FM / AUX / BASS BOOST | The bass is so heavy the car bounces and the windows rattle | Action-movie fireball; tires and doors fly | $35,000 |
 | 5 | **Data center** | Wall of PA speakers | Server terminal, green-text command line | *Proposed:* RACK A–D (confirm) | Roaring server fans, echoing aisles | Racks short out in a chain reaction and topple like dominoes | $250,000,000 |

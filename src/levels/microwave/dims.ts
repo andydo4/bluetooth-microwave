@@ -1,4 +1,4 @@
-// Microwave dimensions, shared by the intact model (Microwave.tsx) and its debris (Mayhem.tsx).
+// Microwave dimensions, shared by the intact model (Model.tsx) and its debris (effects.tsx).
 // Units: 5 wide, 3 tall, 3.4 deep (front face at z = 1.7), centered on the origin.
 // Cooking cavity on the left (x -2.4..1.2), control panel on the right (x 1.25..2.5).
 

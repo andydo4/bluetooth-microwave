@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import Scene from './components/Scene'
-import ControlPanel, { MiniDisplay } from './components/ControlPanel'
+import Scene, { ZOOM_IN_SECONDS, ZOOM_OUT_SECONDS } from './components/Scene'
 import * as sound from './audio/engine'
+import { LEVELS, nextLevel } from './levels'
+import type { Source, Status, Transition, Wreck } from './levels/types'
+import { MiniDisplay } from './levels/shared/led'
+import { LevelBadge, LevelPicker, Receipt } from './ui/Progress'
 
-export type Status = 'idle' | 'loading' | 'playing'
-/** What to play: a pasted YouTube link, or one of the panel's preset buttons. */
-export type Source = { url: string } | { preset: string }
-/** DO NOT PRESS: arcing sparks → fire → exploded (until you buy a new one). */
-export type Wreck = 'none' | 'arcing' | 'fire' | 'exploded'
-
-// Phones get the microwave full-screen and the control panel in a slide-up sheet; on its face it'd be too small to tap.
+// Phones get the machine full-screen and the controls in a slide-up sheet; on its face they'd be too small to tap.
 const PHONE_QUERY = '(max-width: 700px)'
 function useIsPhone() {
   const [phone, setPhone] = useState(() => matchMedia(PHONE_QUERY).matches)
@@ -22,6 +19,24 @@ function useIsPhone() {
   return phone
 }
 
+// Progress is saved in this browser. Storage can be missing or blocked (private mode), so never rely on it.
+function load(key: string, fallback: number) {
+  try {
+    const value = localStorage.getItem(key)
+    return value === null ? fallback : Number(value)
+  } catch {
+    return fallback
+  }
+}
+function save(key: string, value: number) {
+  try {
+    localStorage.setItem(key, String(value))
+  } catch {
+    // progress just won't persist
+  }
+}
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, Number.isFinite(n) ? n : min))
+
 export default function App() {
   const phone = useIsPhone()
   const [status, setStatus] = useState<Status>('idle')
@@ -29,14 +44,30 @@ export default function App() {
   const [endsAt, setEndsAt] = useState(0)
   const [power, setPower] = useState(10)
   const [wreck, setWreck] = useState<Wreck>('none')
-  const [canBuyNew, setCanBuyNew] = useState(false)
+  const [showReceipt, setShowReceipt] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false) // phones: is the control panel slid up?
-  // Ends the current run (song finished, STOP pressed, or an error). Set by start().
-  // quiet: no power-down sound (the explosion makes its own).
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [transition, setTransition] = useState<Transition>('idle')
+
+  // Progression: current level, how many levels are unlocked, running total of damages.
+  const [levelIndex, setLevelIndex] = useState(() => clamp(load('bm.level', 0), 0, LEVELS.length - 1))
+  const [unlocked, setUnlocked] = useState(() => clamp(load('bm.unlocked', 1), 1, LEVELS.length))
+  const [damages, setDamages] = useState(() => load('bm.damages', 0) || 0)
+  const level = LEVELS[levelIndex]
+  const next = nextLevel(levelIndex)
+  useEffect(() => save('bm.level', levelIndex), [levelIndex])
+  useEffect(() => save('bm.unlocked', unlocked), [unlocked])
+  useEffect(() => save('bm.damages', damages), [damages])
+  useEffect(() => sound.setLevelSound(level.sound), [level])
+
+  // Ends the current run (song finished, STOP pressed, an error, or leaving the level). Set by start().
+  // quiet: no power-down sound (the machine is wrecked, or we're switching level).
   const finishRef = useRef<((message?: string, quiet?: boolean) => void) | null>(null)
+  const wreckRef = useRef(wreck)
+  wreckRef.current = wreck
 
   async function start(source: Source) {
-    if (status !== 'idle' || wreck !== 'none') return
+    if (status !== 'idle' || wreck !== 'none' || transition !== 'idle') return
     setError('')
     sound.powerOn()
     setStatus('loading')
@@ -50,7 +81,8 @@ export default function App() {
       finishRef.current = null
       abort.abort()
       song?.stop()
-      if (!quiet) sound.powerOff()
+      // After an explosion the song plays on from the surviving speaker; no machine left to power off.
+      if (!quiet && wreckRef.current !== 'exploded') sound.powerOff()
       setStatus('idle')
       setError(message)
     }
@@ -83,37 +115,65 @@ export default function App() {
   }
 
   function overload() {
-    if (wreck !== 'none') return
+    if (wreck !== 'none' || transition !== 'idle') return
+    const bill = level.bill
     sound.startOverload()
-    setWreck('arcing')
-    setTimeout(() => setWreck('fire'), sound.OVERLOAD_FIRE_AT * 1000)
+    setWreck('overloading')
+    setTimeout(() => setWreck('critical'), sound.OVERLOAD_CRITICAL_AT * 1000)
     setTimeout(() => {
-      finishRef.current?.('', true)
+      // The speaker survives: a playing song carries on, un-muffled (see sound.explode).
       sound.explode()
       setWreck('exploded')
-      setTimeout(() => setCanBuyNew(true), 2500)
+      setUnlocked((u) => Math.max(u, Math.min(levelIndex + 2, LEVELS.length)))
+      setDamages((d) => d + bill)
+      setTimeout(() => setShowReceipt(true), 2500)
     }, sound.OVERLOAD_BOOM_AT * 1000)
   }
 
+  /** Same level again: a new one drops in. */
   function buyNew() {
-    setCanBuyNew(false)
+    finishRef.current?.('', true)
+    setShowReceipt(false)
     sound.resetAfterExplosion()
     setWreck('none')
   }
 
-  function changePower(level: number) {
-    setPower(level)
-    sound.setPowerLevel(level)
+  /** Another level (Upgrade, or the picker): pull the camera out, swap levels, zoom in on the new one. */
+  function goToLevel(index: number) {
+    setPickerOpen(false)
+    if (index === levelIndex) {
+      if (wreck === 'exploded') buyNew()
+      return
+    }
+    finishRef.current?.('', true)
+    setShowReceipt(false)
+    setSheetOpen(false)
+    setTransition('out')
+    setTimeout(() => {
+      setLevelIndex(index)
+      sound.setLevelSound(LEVELS[index].sound)
+      sound.resetAfterExplosion()
+      setWreck('none')
+      setError('')
+      setTransition('in')
+      setTimeout(() => setTransition('idle'), ZOOM_IN_SECONDS * 1000)
+    }, ZOOM_OUT_SECONDS * 1000)
   }
 
+  function changePower(n: number) {
+    setPower(n)
+    sound.setPowerLevel(n)
+  }
+
+  const { Controls } = level
   const panel = (
-    <ControlPanel
+    <Controls
       status={status}
       endsAt={endsAt}
       error={error}
       power={power}
       wreck={wreck}
-      // On phones, starting something closes the sheet so you watch the microwave.
+      // On phones, starting something closes the sheet so you watch the machine.
       onStart={(source) => {
         setSheetOpen(false)
         start(source)
@@ -126,21 +186,38 @@ export default function App() {
       }}
     />
   )
-  const on = status !== 'idle' || wreck === 'arcing' || wreck === 'fire'
-  const buyButton = canBuyNew && (
-    <button
-      onClick={buyNew}
-      className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 animate-bounce rounded-full bg-zinc-100 px-6 py-3 text-sm font-extrabold tracking-wide text-zinc-900 shadow-[0_4px_0_#71717a]"
-    >
-      Buy new microwave
-    </button>
+  const on = status !== 'idle' || wreck === 'overloading' || wreck === 'critical'
+  const busy = wreck === 'overloading' || wreck === 'critical' || transition !== 'idle'
+
+  const overlays = (
+    <>
+      <LevelBadge index={levelIndex} level={level} disabled={busy} onOpen={() => setPickerOpen(true)} />
+      {showReceipt && (
+        <Receipt
+          level={level}
+          total={damages}
+          next={next === null ? null : LEVELS[next]}
+          onBuyNew={buyNew}
+          onUpgrade={() => next !== null && goToLevel(next)}
+        />
+      )}
+      {pickerOpen && (
+        <LevelPicker levels={LEVELS} current={levelIndex} unlocked={unlocked} onPick={goToLevel} onClose={() => setPickerOpen(false)} />
+      )}
+      {/* Level change: fade to dark at the end of the pull-out, back in as the new level arrives. */}
+      <div
+        className={`pointer-events-none absolute inset-0 z-50 bg-[#0d0d10] transition-opacity ${
+          transition === 'out' ? 'opacity-100 delay-700 duration-500' : 'opacity-0 duration-700'
+        }`}
+      />
+    </>
   )
 
   if (phone) {
     return (
       <main className="relative h-svh w-screen overflow-hidden">
-        <Scene on={on} wreck={wreck} panel={null} />
-        {buyButton}
+        <Scene level={level} on={on} wreck={wreck} transition={transition} panel={null} />
+        {overlays}
 
         {/* Collapsed: a small bar with the LED readout. Tap to slide the controls up. */}
         <button
@@ -148,7 +225,7 @@ export default function App() {
           className="absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 touch-manipulation items-center gap-3 rounded-full border border-black/60 bg-[#141418]/95 py-2 pl-4 pr-3 shadow-[0_4px_16px_#000a]"
         >
           <span className="flex h-8 min-w-[92px] items-center justify-end rounded-sm bg-[#071108] px-2">
-            <MiniDisplay status={status} endsAt={endsAt} error={error} wreck={wreck} />
+            <MiniDisplay status={status} endsAt={endsAt} error={error} wreck={wreck} wreckLabels={level.wreckLabels} />
           </span>
           <span className="whitespace-nowrap text-[11px] font-bold tracking-[0.15em] text-zinc-300">CONTROLS ▲</span>
         </button>
@@ -175,8 +252,8 @@ export default function App() {
 
   return (
     <main className="relative h-svh w-screen">
-      <Scene on={on} wreck={wreck} panel={panel} />
-      {buyButton}
+      <Scene level={level} on={on} wreck={wreck} transition={transition} panel={panel} />
+      {overlays}
     </main>
   )
 }
