@@ -75,8 +75,18 @@ export function noiseHit(at: number, length: number, volume: number, type: Biqua
 export type HumNode = OscillatorNode | AudioBufferSourceNode
 
 export type LevelSound = {
-  /** Lowpass cutoff (Hz) at power level 10, i.e. fully sealed in. Optional wobble makes it slosh. */
-  muffle: { cutoff: number; wobbleHz?: number; wobbleDepth?: number }
+  /**
+   * Lowpass cutoff (Hz) at power level 10, i.e. fully sealed in. Optional wobble makes it slosh.
+   * room: the reverb around the speaker (default: a tiny metal box, 0.18 s). Bigger spaces (a lift
+   * shaft, server aisles) want seconds 1–3 and a slower decay. bass: low-shelf boost in dB (car).
+   */
+  muffle: {
+    cutoff: number
+    wobbleHz?: number
+    wobbleDepth?: number
+    room?: { seconds: number; decay: number; wet: number }
+    bass?: number
+  }
   /** The machine's running sound, connected to `dest`. Return the sources; the engine starts them. */
   hum(c: AudioContext, dest: AudioNode): HumNode[]
   /** The "done" signal after power-down (microwave beeps, washer chime...), at time `at`. */
@@ -87,24 +97,26 @@ export type LevelSound = {
   explodeExtra?(t0: number): void
 }
 
+const BOX_ROOM = { seconds: 0.18, decay: 0.035, wet: 0.25 }
+
 let level: LevelSound | null = null
 export function setLevelSound(sound: LevelSound) {
   level = sound
+  if (muffle && ctx) muffle.reverb.buffer = roomImpulse(ctx, sound.muffle.room ?? BOX_ROOM)
   if (ctx) applyMuffle(ctx.currentTime)
 }
 
 // ---------------------------------------------------------------------------------------------
 // The shared music player and muffle chain
 
-// Short, bright decay: what a small metal cavity adds to a sound.
-function boxImpulse(c: AudioContext): AudioBuffer {
-  const seconds = 0.18
+// Decaying noise: the reverb of the space around the speaker (a small metal cavity by default).
+function roomImpulse(c: AudioContext, { seconds, decay }: { seconds: number; decay: number }): AudioBuffer {
   const buf = c.createBuffer(2, c.sampleRate * seconds, c.sampleRate)
   for (let ch = 0; ch < 2; ch++) {
     const data = buf.getChannelData(ch)
     for (let i = 0; i < data.length; i++) {
       const t = i / c.sampleRate
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-t / 0.035)
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-t / decay)
     }
   }
   return buf
@@ -121,6 +133,8 @@ let muffle: {
   shaper: WaveShaperNode // pass-through until the overload distorts it
   gate: GainNode // the overload stutters the music with it
   wet: GainNode
+  reverb: ConvolverNode
+  bass: BiquadFilterNode // low shelf, 0 dB unless the level boosts it
   wobble: OscillatorNode // sloshing cutoff (washer); depth 0 when unused
   wobbleDepth: GainNode
 } | null = null
@@ -132,7 +146,8 @@ function applyMuffle(at: number) {
   muffle.lp1.frequency.setTargetAtTime(cutoff, at, 0.05)
   muffle.lp2.frequency.setTargetAtTime(cutoff * 1.3, at, 0.05)
   muffle.box.gain.setTargetAtTime(clear ? 0 : 5 * (powerLevel / 10), at, 0.05)
-  muffle.wet.gain.setTargetAtTime(clear ? 0.05 : 0.25, at, 0.05)
+  muffle.wet.gain.setTargetAtTime(clear ? 0.05 : (m.room ?? BOX_ROOM).wet, at, 0.05)
+  muffle.bass.gain.setTargetAtTime(clear ? 0 : (m.bass ?? 0), at, 0.05)
   muffle.wobble.frequency.setTargetAtTime(m.wobbleHz ?? 1, at, 0.05)
   muffle.wobbleDepth.gain.setTargetAtTime(clear ? 0 : (m.wobbleDepth ?? 0) * (powerLevel / 10), at, 0.05)
 }
@@ -162,6 +177,9 @@ function getPlayer(): HTMLAudioElement {
   box.type = 'peaking'
   box.frequency.value = 320
   box.Q.value = 2
+  const bass = c.createBiquadFilter()
+  bass.type = 'lowshelf'
+  bass.frequency.value = 120
 
   const wobble = c.createOscillator()
   const wobbleDepth = c.createGain()
@@ -174,17 +192,17 @@ function getPlayer(): HTMLAudioElement {
   const dry = c.createGain()
   dry.gain.value = 0.8
   const reverb = c.createConvolver()
-  reverb.buffer = boxImpulse(c)
+  reverb.buffer = roomImpulse(c, level?.muffle.room ?? BOX_ROOM)
   const wet = c.createGain()
 
   const shaper = c.createWaveShaper()
   shaper.oversample = '4x'
   const gate = c.createGain()
 
-  src.connect(lp1).connect(lp2).connect(box).connect(shaper).connect(gate)
+  src.connect(lp1).connect(lp2).connect(box).connect(bass).connect(shaper).connect(gate)
   gate.connect(dry).connect(master)
   gate.connect(reverb).connect(wet).connect(master)
-  muffle = { lp1, lp2, box, shaper, gate, wet, wobble, wobbleDepth }
+  muffle = { lp1, lp2, box, shaper, gate, wet, reverb, bass, wobble, wobbleDepth }
   applyMuffle(c.currentTime)
   return player
 }

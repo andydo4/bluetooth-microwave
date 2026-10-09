@@ -1,6 +1,6 @@
 # Levels plan (agreed with Andy, October 8 2026)
 
-**Status:** the shared systems below are built, plus levels 1 (Microwave) and 2 (Washing machine). Next: Andy approves the washer's look and feel, then elevator, car and data center (can be built in parallel, each in its own `src/levels/<id>/` folder; see "Adding a level" in ARCHITECTURE.md).
+**Status:** the shared systems below are built, plus levels 1–5 (Microwave, Washing machine, Elevator, Car, Data center). Next: Space station → Alien planet → The Universe (each in its own `src/levels/<id>/` folder; see "Adding a level" in ARCHITECTURE.md). Levels 3–5 were built in parallel by separate agents from the washer template.
 
 After the microwave explodes, you can **upgrade to a bigger thing** that can also blow up, escalating from the kitchen to the whole universe. Each level has its own object, an upgraded speaker, themed controls, its own sound and its own explosion.
 
@@ -10,9 +10,9 @@ After the microwave explodes, you can **upgrade to a bigger thing** that can als
 |---|---|---|---|---|---|---|---|
 | 1 | **Microwave** ✅ built | Small portable cylinder speaker | Microwave keypad + LED | POPCORN / DEFROST / REHEAT / BEVERAGE | Turntable spins; power level = muffle amount | Sparks → fire → debris | $89 |
 | 2 | **Washing machine** ✅ built | Boombox | Big cycle dial + LED; WATER LEVEL LOW/MED/HIGH = power | DELICATE / HEAVY / RINSE / SPIN | **The speaker tumbles in the drum**; music sounds wet and sloshy (wobbling cutoff) | `UE` rattle → `SUDS` foams over → foam blanket | $649 |
-| 3 | **Elevator** | *Proposed:* hi-fi floor-standing speaker tower (confirm with Andy) | Brass floor-button panel + floor counter + door open/close + red alarm bell | *Proposed:* floor buttons (e.g. LOBBY / 2 / 3 / PENTHOUSE) | Your song becomes **elevator music**: muffled, echoing in a metal shaft; the floor counter climbs as it plays | The cable snaps, sparks run down the shaft, the car plummets and crashes, the doors blow off | $48,000 |
-| 4 | **Car** | Trunk subwoofer stack | Car-stereo head unit | AM / FM / AUX / BASS BOOST | The bass is so heavy the car bounces and the windows rattle | Action-movie fireball; tires and doors fly | $35,000 |
-| 5 | **Data center** | Wall of PA speakers | Server terminal, green-text command line | *Proposed:* RACK A–D (confirm) | Roaring server fans, echoing aisles | Racks short out in a chain reaction and topple like dominoes | $250,000,000 |
+| 3 | **Elevator** ✅ built | Hi-fi floor-standing speaker tower | Brass floor-button panel + floor counter; door OPEN (power 4) / CLOSE (power 10); ALARM bell | LOBBY / MEZZ / SKY / PENTHOUSE | Your song becomes **elevator music**: muffled, echoing in a metal shaft; the floor counter climbs as it plays | The cable snaps, sparks run down the shaft, the car plummets and crashes, the doors blow off | $48,000 |
+| 4 | **Car** ✅ built | Trunk subwoofer box | Car-stereo head unit on a stand; BASS 1–10 rocker = power | AM / FM / AUX / BASS BOOST | The bass is so heavy the car bounces and the windows rattle | Action-movie fireball; tires and doors fly | $35,000 |
+| 5 | **Data center** ✅ built | Wall of PA speakers (3×3) | Server terminal on a crash cart; cooling LOW/MED/MAX = power | RACK A / B / C / D | Roaring server fans, echoing aisles | Racks short out in a chain reaction and topple like dominoes | $250,000,000 |
 | 6 | **Space station** | Concert speaker line array | Spacecraft console: switches, warning lights | *Proposed:* COMMS 1–4 (confirm) | **No sound in space**: the music fades to near-silence | Zero gravity: debris drifts away forever instead of falling | $150,000,000,000 |
 | 7 | **Alien planet** | Glowing alien sound orb | Unreadable glyph controls that light up | *Proposed:* 4 alien glyphs (confirm) | Warped, alien reverb | The planet cracks open and glows | 1 planet |
 | 8 | **The Universe** (finale) | A black hole | Cosmic dials | *Proposed:* to decide | Everything collapses toward the black hole | **Big Bang**. Its leftover glow is called the *cosmic microwave background*, so the universe resets to… a microwave (back to level 1) | $∞ |
@@ -31,6 +31,10 @@ Andy's decisions: each level keeps the **same 4 songs** with themed button label
 4. **Cheap zoom-out transition** (Andy likes this): on Upgrade, the camera pulls back fast (about 10 → 60 units in ~1.2 s), so the wreckage shrinks to a dot while the next level fades in around it. Build it once in the level system. (A true seamless "each level contains the previous one" zoom was judged impractical.)
 5. **Damage bill** (Andy loves this): after each explosion a receipt pops up ("Microwave: $89"), plus a running **"total damages"** across the whole game (saved with progression). "Buy new" buttons show the price. The prices are in the table above.
 
+## Wreck labels (LED words for the two overload stages)
+
+Microwave HOT/FIRE · Washer UE/SUDS · Elevator JAM/FALL · Car REV/FIRE · Data center TEMP/FAIL
+
 ## Build order
 
 1. Level system + progression + picker + damage bill + leveling-up speaker + zoom-out, with only the microwave as a level (no visible new level yet).
@@ -39,8 +43,7 @@ Andy's decisions: each level keeps the **same 4 songs** with themed button label
 
 ## Still open (ask Andy)
 
-- Speaker for the elevator level (proposed: hi-fi floor-standing tower).
-- Preset labels for elevator, data center, space station, alien planet, universe (proposals above).
+- Preset labels for space station, alien planet, universe (proposals above).
 - Possible easter egg: a bonus song that only plays on the space level (suggested, not decided).
 
 ## Ideas Andy rejected (don't re-propose)

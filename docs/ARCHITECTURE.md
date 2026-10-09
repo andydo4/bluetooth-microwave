@@ -38,7 +38,8 @@ src/levels/<level>/          One folder per level, same shape:
   sound.ts                   LevelSound: muffle cutoff, hum, end signal, overload, explosion extras
   labels.ts                  LED words for the two overload stages
   dims.ts                    dimensions/materials shared by Model and effects
-  (speaker file)             microwave/Speaker.tsx, washer/Boombox.tsx, ...
+  (speaker file)             microwave/Speaker.tsx, washer/Boombox.tsx, elevator/Tower.tsx,
+                             car/SubBox.tsx, datacenter/SpeakerWall.tsx
 Dockerfile, .dockerignore    Production image
 ```
 
@@ -79,7 +80,8 @@ Everything is Web Audio. There are no audio files.
 
 - **Muffle chain (the core joke):** `<audio>` → `MediaElementSource` → lowpass → lowpass → peaking "box" resonance (320 Hz) → waveshaper (pass-through unless overloading) → gate → dry + short convolution "metal box" reverb → master.
 - **Power level 1–10** (keypad digits, 0 = 10) sets how muffled it is: cutoff = `700 × 12^((10 − level) / 9)` Hz, so level 10 = 700 Hz (sealed in) and level 1 ≈ 8.4 kHz (barely muffled). lp2 = cutoff × 1.3, box gain = 5 × level/10. It changes live while playing.
-- **Hum:** 120 Hz sawtooth (lowpassed) + 60 Hz sine + bandpassed noise (fan). It is not muffled; it's the microwave itself.
+- **Per-level muffle options** (`LevelSound.muffle`): `cutoff`, optional `wobbleHz/wobbleDepth` (washer slosh), `room` (reverb size: elevator shaft, data-center hall; default is the microwave's tiny metal box) and `bass` (low-shelf dB boost, car).
+- **Hum (microwave):** 120 Hz sawtooth (lowpassed) + 60 Hz sine + bandpassed noise (fan). It is not muffled; it's the microwave itself.
 - **Power off:** hum pitch spins down, relay clunk (filtered noise), 3 beeps.
 - **Overload:** `startOverload()` turns on waveshaper distortion and a random stutter gate on the music, ramps the hum pitch up 1.8×, and schedules crackles, a fire roar from 3 s and alarm beeps. `explode()` cuts everything and plays a boom (dark noise + falling sub-bass), debris thuds and a 4.2 kHz tinnitus tone. `resetAfterExplosion()` restores the chain and plays a ding.
 - **iOS (important):** Safari only allows `audio.play()` *during the user's tap*, but the song arrives seconds later. So one shared `<audio>` element is created once, wired into the chain once (`createMediaElementSource` can only be called once per element), and unlocked in `powerOn()` by playing a 0.1 s silent WAV blob during the START tap. Songs later reuse that element. **Don't create a new `Audio()` per song.**
